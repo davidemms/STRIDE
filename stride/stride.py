@@ -580,10 +580,10 @@ def WriteResults(species_tree_fn_or_text, roots, S, clades, clusters_counter, ou
 #        print(t)
     with open(output_dir + "Duplication_counts.csv", 'wb') as outfile:
         writer = csv.writer(outfile)
-        writer.writerow(["Node", "MP Root", "Probability", "Duplications supporting clade", "Duplications supporting opposite clade"])
+        writer.writerow(["Branch", "MP Root", "Probability", "Duplications supporting clade", "Duplications supporting opposite clade"])
         qSingle = len(thisRoot) == 1
         if qSingle:
-            root_data = next(r for r in table.values() if r[1] == "X")
+            root_data = [r for r in table.values() if r[1] == "X"][-1]
             writer.writerow([root_data[0] + " (& N1)"] + root_data[1:])
         else:
             root_data = table['N1']
