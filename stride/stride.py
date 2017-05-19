@@ -653,26 +653,27 @@ def Main_Full(args):
     if not args.directory:
         speciesTree = ete.Tree(args.Species_tree, format=spTreeFormat)
         species, dict_clades, clade_names = AnalyseSpeciesTree(speciesTree)
-        c = SupportedHierachies_wrapper(args.input_tree, GeneToSpecies, species, dict_clades, clade_names)      
+        c = SupportedHierachies_wrapper(args.gene_trees, GeneToSpecies, species, dict_clades, clade_names)      
         for k, v in c.items(): print((k, v))
-    elif args.debug:
-        speciesTree = ete.Tree(args.Species_tree, format=spTreeFormat)
-        species, dict_clades, clade_names = AnalyseSpeciesTree(speciesTree)
-        clusters_counter = Counter()
-        for fn in glob.glob(args.input_tree + "/*"):
-            c = SupportedHierachies_wrapper(fn, GeneToSpecies, species, dict_clades, clade_names)
-            clusters_counter.update(c)
-        roots, nSupport = ParsimonyRoot(species, dict_clades.keys(), clusters_counter)
-        PrintRootingSummary(roots, clusters_counter, nSupport)
+#    elif args.debug:
+#        speciesTree = ete.Tree(args.Species_tree, format=spTreeFormat)
+#        species, dict_clades, clade_names = AnalyseSpeciesTree(speciesTree)
+#        clusters_counter = Counter()
+#        for fn in glob.glob(args.gene_trees + "/*"):
+#            c = SupportedHierachies_wrapper(fn, GeneToSpecies, species, dict_clades, clade_names)
+#            clusters_counter.update(c)
+#        roots, nSupport = ParsimonyRoot(species, dict_clades.keys(), clusters_counter)
+#        PrintRootingSummary(roots, clusters_counter, nSupport)
     else:
-        nTrees = len(glob.glob(args.input_tree + "/*"))
+        nTrees = len(glob.glob(args.gene_trees + "/*"))
         if nTrees == 0:
-            print("No trees found in %s\nExiting" % args.input_tree)
+            print("No trees found in %s\nExiting" % args.gene_trees)
             sys.exit()
         print("Analysing %d gene trees" % nTrees)
-        roots, clusters_counter, _, nSupport, clades, species = GetRoot(args.Species_tree, args.input_tree, GeneToSpecies, nProcs, treeFmt = 1, qWriteDupTrees=args.output)
+#        roots, clusters_counter, _, nSupport, clades, species = GetRoot(args.Species_tree, args.gene_trees, GeneToSpecies, nProcs, treeFmt = 1, qWriteDupTrees=args.output)
+        roots, clusters_counter, _, nSupport, clades, species = GetRoot(args.Species_tree, args.gene_trees, GeneToSpecies, nProcs, treeFmt = 1)
         PrintRootingSummary(roots, clusters_counter, nSupport)
-        outputDir = CreateNewWorkingDirectory(args.input_tree + "/../STRIDE_Results")
+        outputDir = CreateNewWorkingDirectory(args.gene_trees + "/../STRIDE_Results")
 #        shelveFN = outputDir + "STRIDE_data.shv"
 #        d = shelve.open(shelveFN)
 #        d['roots'] = roots
@@ -683,7 +684,7 @@ def Main_Full(args):
 #        with open(args.Species_tree, 'rb') as infile:
 #            tree_text = "".join([l.rstrip() for l in infile.readlines()])
 #        d['SpeciesTreeText'] = tree_text
-#        d['TreesDir'] = os.path.abspath(args.input_tree)
+#        d['TreesDir'] = os.path.abspath(args.gene_trees)
 #        d['clades'] = clades
 #        d.close()
 #        outputFigFN = outputFN_base + ".pdf"
@@ -693,20 +694,20 @@ def Main_Full(args):
       
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_tree")
-    parser.add_argument("-s", "--separator", choices=("dot", "dash", "second_dash", "3rd_dash", "hyphen"))
-    parser.add_argument("-S", "--Species_tree")
-    parser.add_argument("-d", "--directory", action="store_true")
-    parser.add_argument("--debug", action="store_true", help="Run in serial to enable easier debugging")
-    parser.add_argument("-o", "--output", action="store_true", help="Write out gene trees rooted at duplications")
+    parser.add_argument("gene_trees", help = "Directory conaining gene trees (with -d argument) or filename of a single gene tree to analyse (no -d argument)")
+    parser.add_argument("-s", "--separator", choices=("dot", "dash", "second_dash", "3rd_dash", "hyphen"), help="Separator been species name and gene name in gene tree taxa")
+    parser.add_argument("-S", "--Species_tree", help="Unrooted species tree in newick format")
+    parser.add_argument("-d", "--directory", action="store_true", help="Process all trees in input directory")
+#    parser.add_argument("--debug", action="store_true", help="Run in serial to enable easier debugging")
+#    parser.add_argument("-o", "--output", action="store_true", help="Write out gene trees rooted at duplications")
     parser.set_defaults(Func=Main_Full)   
     args = parser.parse_args()
-    if args.output:
-        x = (args.input_tree if args.directory else os.path.split(args.input_tree)[0]) 
-        while x[-1] == "/":
-            x = x[:-1]
-        outputDir = x + "_rooted_duplications/" 
-        if not os.path.exists(outputDir): os.mkdir(outputDir)
+#    if args.output:
+#        x = (args.gene_trees if args.directory else os.path.split(args.gene_trees)[0]) 
+#        while x[-1] == "/":
+#            x = x[:-1]
+#        outputDir = x + "_rooted_duplications/" 
+#        if not os.path.exists(outputDir): os.mkdir(outputDir)
     args.Func(args)
     
  
