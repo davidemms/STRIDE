@@ -522,8 +522,6 @@ def GetRoot(speciesTreeFN, treesDir, GeneToSpeciesMap, nProcessors, qWriteDupTre
         all_stride_dup_genes.update(stride_dup_genes)
     roots, nSupport = ParsimonyRoot(species, list(dict_clades.keys()), clusters)
     roots = list(set(roots))
-    print("roots")
-    print(roots[0])
     speciesTrees_rootedFNs =[]
     # Get distance of each from a supported clade
     topDist = []
