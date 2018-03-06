@@ -48,7 +48,7 @@ except ImportError:
         qete = True
     except ImportError:
         pass
-   
+
 def compare(exp, act):
     """exp - expected set of species
     act - actual set of species
@@ -59,6 +59,8 @@ criteria = "crit_all"
 
 nProcs = mp.cpu_count()
 spTreeFormat = 1  
+
+tooLarge = frozenset(["Too many genes"])
 
 class Node(object):
     """ The class allows the user to get the 'child' nodes in any of the three directions
@@ -124,6 +126,39 @@ class Node(object):
             return [c1clades, [c21clade, c22clade]]
         else:
             raise Exception("Expected binary tree")
+      
+    def get_up_genes(self, nMax):
+        if self.node.is_root(): 
+            raise Exception("Error in duplicate gene identification, no 'up' node.")
+        nUp = len(self.node.get_tree_root()) - len(self.node)
+        if nUp > nMax: return tooLarge
+        else:
+            return frozenset(self.node.get_tree_root().get_leaf_names()).difference(frozenset(self.node.get_leaf_names()))        
+      
+    def get_gene_sets(self, i, j, nMax=2000):
+        """
+        Mirrors get_grandrelative_clades_stored. 
+        i - 0,1,2: set of clades with respect to order in get_grandrelative_clades_stored
+        j - 0,1,2: set of clades with respect to order in get_grandrelative_clades_stored
+        
+        Returns the actuall genes in the clades
+        """
+        if self.node.is_root():
+            children = self.node.get_children()
+            if len(children) != 3: return None
+            return (tooLarge if len(children[i]) > nMax else frozenset(children[i].get_leaf_names()), tooLarge if len(children[j]) > nMax else frozenset(children[j].get_leaf_names()))
+        else:
+            children = self.node.get_children()
+            if len(children) != 2: return frozenset([]), frozenset([])
+            if i <= 1:
+                iGenes = frozenset(children[i].get_leaf_names()) if len(children[i]) < nMax else tooLarge
+            else:
+                iGenes = frozenset(self.get_up_genes(nMax))
+            if j <=1:
+                jGenes = frozenset(children[j].get_leaf_names()) if len(children[j]) < nMax else tooLarge
+            else:
+                jGenes = frozenset(self.get_up_genes(nMax))
+            return iGenes, jGenes
       
     def get_grandrelative_clades_stored(self):
         """
@@ -265,7 +300,8 @@ def LocalCheck_clades(clade1, clade2, expClades, GeneToSpecies):
     Y = set.union(*expClades[1])
     x0, x1 = expClades[0] if len(expClades[0]) == 2 else (None, None) if len(expClades[0]) == 1 else (Exception, Exception)
     y0, y1 = expClades[1] if len(expClades[1]) == 2 else (None, None) if len(expClades[1]) == 1 else (Exception, Exception)
-    if x0 == Exception or y0 == Exception: raise Exception
+    if x0 == Exception or y0 == Exception: 
+        return False   # Can't get a well-supported duplication meeting topology criteria if tree is not fully resolved
     for actClades in [clade1, clade2]:
             iUsed = None
             for clade in actClades:
@@ -307,6 +343,7 @@ def SupportedHierachies(t, G, S, GeneToSpecies, species, dict_clades, clade_name
     """
     qAncient = False
     supported = defaultdict(int)
+    genesPostDup = set()
     # Pre-calcualte species sets on tree: traverse tree from leaves inwards
     StoreSpeciesSets(t, GeneToSpecies, G)
     if qWriteDupTrees:
@@ -366,6 +403,8 @@ def SupportedHierachies(t, G, S, GeneToSpecies, species, dict_clades, clade_name
                         if clades == None: break   # locally non-binary in vicinity of node, skip to next node
                     if not LocalCheck_clades(clades[i], clades[j], dict_clades[k1], GeneToSpecies): continue
                     supported[frozenset(k1)] +=1
+                    genes = N.get_gene_sets(i, j)
+                    genesPostDup.add(genes[0].union(genes[1]))
                     if qWriteDupTrees:
                         if t_write == None: 
                             try:
@@ -376,7 +415,7 @@ def SupportedHierachies(t, G, S, GeneToSpecies, species, dict_clades, clade_name
                         gSets = GetStoredGeneSets(n)
                         SaveTree(t_write, gSets[ii], clade_names[k1], treeName, iExample)
                         iExample += 1       
-    return supported   
+    return supported, genesPostDup  
     
 """
 Parallelisation wrappers
@@ -384,7 +423,7 @@ Parallelisation wrappers
 """
 
 def SupportedHierachies_wrapper(treeName, GeneToSpecies, species, dict_clades, clade_names, qWriteDupTrees=False):
-    if not os.path.exists(treeName): return []
+    if not os.path.exists(treeName): return [], []
     t = ete.Tree(treeName, format=1)
     G = set(t.get_leaf_names())
     S = set(map(GeneToSpecies, G))
@@ -393,8 +432,8 @@ def SupportedHierachies_wrapper(treeName, GeneToSpecies, species, dict_clades, c
         print("Some genes cannot be mapped to species in the species tree")
         print(S.difference(species))
         return None
-    if len(S) < 4:
-        return []
+    if len(S) < 3:
+        return defaultdict(int), []
     result = SupportedHierachies(t, G, S, GeneToSpecies, species, dict_clades, clade_names, treeName, qWriteDupTrees)
     return result
     
@@ -461,30 +500,57 @@ def ParsimonyRoot(allSpecies, clades, supported_clusters_counter):
                 roots.append(clade)
     return roots, nSupport
 
-def GetRoot(speciesTreeFN, treesDir, GeneToSpeciesMap, nProcessors, treeFmt=3, qWriteDupTrees=False, qWriteRootedTree=False):
+def GetRoot(speciesTreeFN, treesDir, GeneToSpeciesMap, nProcessors, qWriteDupTrees=False, qWriteRootedTree=False):
     """ 
                     ******* The Main method ******* 
     """
-    speciesTree = ete.Tree(speciesTreeFN, format=treeFmt)
+    qHaveBranchSupport = False
+    try:
+        speciesTree = ete.Tree(speciesTreeFN, format=2)
+        qHaveBranchSupport = True
+    except:
+        speciesTree = ete.Tree(speciesTreeFN, format=1)                    
     species, dict_clades, clade_names = AnalyseSpeciesTree(speciesTree)
     pool = mp.Pool(nProcessors, maxtasksperchild=1)       
     list_of_dicts = pool.map(SupportedHierachies_wrapper2, [(fn, GeneToSpeciesMap, species, dict_clades, clade_names, qWriteDupTrees) for fn in glob.glob(treesDir + "/*")])
     clusters = Counter()
-    for l in list_of_dicts:
+    all_stride_dup_genes = set()
+    for l, stride_dup_genes in list_of_dicts:
         if l == None:
             sys.exit()
         clusters.update(l)
-    roots, nSupport = ParsimonyRoot(species, dict_clades.keys(), clusters)
+        all_stride_dup_genes.update(stride_dup_genes)
+    roots, nSupport = ParsimonyRoot(species, list(dict_clades.keys()), clusters)
     roots = list(set(roots))
+    print("roots")
+    print(roots[0])
     speciesTrees_rootedFNs =[]
+    # Get distance of each from a supported clade
+    topDist = []
+    branchDist = []
+    if len(clusters) > 0 and len(roots) > 1:
+        # Evaluate which is the best one
+        for r in roots:
+            speciesTree = RootAtClade(speciesTree, r)
+            topDist.append(min([speciesTree.get_distance(n, topology_only=True) for n in speciesTree.traverse('preorder') if frozenset(n.get_leaf_names()) in clusters]))
+            branchDist.append(min([speciesTree.get_distance(n) for n in speciesTree.traverse('preorder') if (frozenset(n.get_leaf_names()) in clusters and speciesTree.get_distance(n, topology_only=True) == topDist[-1])]))        
+        maxTopDist = max(topDist)
+        bestDist = -1
+        for i, (t, d) in enumerate(zip(topDist, branchDist)):
+            if t == maxTopDist and d > bestDist:
+                bestDist = d
+                iRootToUse = i
+        rootToUse = roots.pop(iRootToUse)
+        roots = [rootToUse] + roots
+        
     if qWriteRootedTree:
         for i, r in enumerate(roots):
             speciesTree = RootAtClade(speciesTree, r) 
             speciesTree_rootedFN = os.path.splitext(speciesTreeFN)[0] + "_%d_rooted.txt" % i 
     #    speciesTree = LabelNodes()
-            speciesTree.write(outfile=speciesTree_rootedFN, format=4)
+            speciesTree.write(outfile=speciesTree_rootedFN, format = 2 if qHaveBranchSupport else 1)
             speciesTrees_rootedFNs.append(speciesTree_rootedFN)
-    return roots, clusters, speciesTrees_rootedFNs, nSupport, dict_clades.keys(), species
+    return roots, clusters, speciesTrees_rootedFNs, nSupport, list(dict_clades.keys()), species, all_stride_dup_genes
 
 def PrintRootingSummary(roots, clusters_counter, nSupport):
     nAll = sum(clusters_counter.values())
@@ -547,89 +613,52 @@ def WriteResults(species_tree_fn_or_text, roots, S, clades, clusters_counter, ou
 #    print(species_tree)
 #    species_tree = ete.Tree(output_dir + "Species_tree_labelled.tre", format=1)
     # Calculate probabilities
-    p_final = probroot.GetProbabilities(species_tree, S, clades, clusters_counter)
+    qBinary = True
+    for n in species_tree.traverse():
+        if len(n.get_children()) > 2:
+            qBinary = False
+    if qBinary:
+        p_final = probroot.GetProbabilities(species_tree, S, clades, clusters_counter)
+    else:
+        print("Probability distribution for root location is not supported for non-binary trees")
+        print("To get a probability distribution for the root, please supply a fully resolved input species tree")
     # Write numbers of duplications
     table = dict()
     new_tree = ete.Tree(output_dir + "Species_tree_labelled.tre", format=1)
     for clade in clades + [frozenset([s]) for s in S]:
-#        print(clade)
         qAnti = False
         anticlade = S.difference(clade)
         if len(clade) == 1:
             node = new_tree & list(clade)[0]
-#            if len(anticlade) == 1: qAnti = True:
-#        elif len(anticlade) == 1:
         else:
             node = new_tree.get_common_ancestor(clade)
         if node == new_tree:
             node = new_tree.get_common_ancestor(anticlade)
             qAnti = True
-#        print("")
-#        print(clade)
-#        print(anticlade)
-#        print(node.name)
-#        print(node)
-        p = p_final[clade] if clade in p_final else p_final[anticlade]
-#        qThisRooting = (clade == thisRoot) or (anticlade == thisRoot)
         x = anticlade if qAnti else clade
         y = clade if qAnti else anticlade
         X = ("(%d)" % clusters_counter[x]) if len(clade) == 1 else clusters_counter[x] 
+        if qBinary:
+            p = p_final[clade] if clade in p_final else p_final[anticlade]
+        else:
+            p = 0.
         table[node.name] = [node.name, "X" if (clade in roots or anticlade in roots) else "", "%0.1f%%" % (100.*p) , X, clusters_counter[y]]
-#    print(len(table))
-#    for t in table.items():
-#        print(t)
     with open(output_dir + "Duplication_counts.csv", 'wb') as outfile:
-        writer = csv.writer(outfile)
+        writer = csv.writer(outfile, delimiter="\t")
         writer.writerow(["Branch", "MP Root", "Probability", "Duplications supporting clade", "Duplications supporting opposite clade"])
         qSingle = len(thisRoot) == 1
         root_branches = [n.name for n in new_tree.get_children()]
         writer.writerow([root_branches[0] + " (& " + root_branches[1] + ")"] + table[root_branches[0]][1:])
-#        if qSingle:
-#        else:
-#            root_data = table['N1']
-#            writer.writerow(['N1 (& N2)'] + root_data[1:])
         for i in range(2 if qSingle else 3, iNode):  
             name = "N%d" % i
             if name in table:
                 writer.writerow(table[name])
             else:
                 print("Skipping %s" % name)
-#                writer.writerow([name, "X" if (clade in roots or anticlade in roots) else "", "%0.1f%%" % (100.*p) , clusters_counter[clade], clusters_counter[anticlade]])
         for sp in S:
             if sp in table:
                 if qSingle and sp in thisRoot: continue
                 writer.writerow(table[sp])
-            
-        
-#        # skip node at top of tree
-#        for i in range(1, iNode):
-#            name = "N%d" % i
-#            if name in skip: continue
-#            node = species_tree & name
-#            clade = frozenset(node.get_leaf_names())
-#            anticlade = S.difference(clade)
-#            if not species_tree.check_monophyly(clade, target_attr="name"):
-#                swap = clade
-#                clade = anticlade
-#                anticlade = swap
-#            print("")
-#            print(name)
-##            print(node)
-#            print((clusters_counter[clade],clade))
-#            print((clusters_counter[anticlade], anticlade))
-#            qThisRooting = (clade == thisRoot) or (anticlade == thisRoot)
-#            if qThisRooting:
-#                antinode = species_tree.get_common_ancestor(anticlade)
-#                skip.append(antinode.name)
-#                name = name + (" (%s)" % antinode.name) 
-#            p = p_final[clade] if clade in p_final else p_final[anticlade]
-#            writer.writerow([name, "X" if (clade in roots or anticlade in roots) else "", "%0.1f%%" % (100.*p) , clusters_counter[clade], clusters_counter[anticlade]])
-
-#        writer.writerow(["Node", "Number of Supporting Duplications"])
-#        for cluster, count in clusters_counter.items():
-#            if len(cluster) == 1: continue
-#            name = GetCluseterName(species_tree, S, cluster)
-#            writer.writerow([name, count])
    
 def Main_Full(args):
     text = """
@@ -653,17 +682,17 @@ def Main_Full(args):
     if not args.directory:
         speciesTree = ete.Tree(args.Species_tree, format=spTreeFormat)
         species, dict_clades, clade_names = AnalyseSpeciesTree(speciesTree)
-        c = SupportedHierachies_wrapper(args.gene_trees, GeneToSpecies, species, dict_clades, clade_names)      
+        c, stride_dup_genes = SupportedHierachies_wrapper(args.gene_trees, GeneToSpecies, species, dict_clades, clade_names)      
         for k, v in c.items(): print((k, v))
-#    elif args.debug:
-#        speciesTree = ete.Tree(args.Species_tree, format=spTreeFormat)
-#        species, dict_clades, clade_names = AnalyseSpeciesTree(speciesTree)
-#        clusters_counter = Counter()
-#        for fn in glob.glob(args.gene_trees + "/*"):
-#            c = SupportedHierachies_wrapper(fn, GeneToSpecies, species, dict_clades, clade_names)
-#            clusters_counter.update(c)
-#        roots, nSupport = ParsimonyRoot(species, dict_clades.keys(), clusters_counter)
-#        PrintRootingSummary(roots, clusters_counter, nSupport)
+    elif args.debug:
+        speciesTree = ete.Tree(args.Species_tree, format=spTreeFormat)
+        species, dict_clades, clade_names = AnalyseSpeciesTree(speciesTree)
+        clusters_counter = Counter()
+        for fn in glob.glob(args.gene_trees + "/*"):
+            c, stride_dup_genes = SupportedHierachies_wrapper(fn, GeneToSpecies, species, dict_clades, clade_names)
+            clusters_counter.update(c)
+        roots, nSupport = ParsimonyRoot(species, dict_clades.keys(), clusters_counter)
+        PrintRootingSummary(roots, clusters_counter, nSupport)
     else:
         nTrees = len(glob.glob(args.gene_trees + "/*"))
         if nTrees == 0:
@@ -671,7 +700,7 @@ def Main_Full(args):
             sys.exit()
         print("Analysing %d gene trees" % nTrees)
 #        roots, clusters_counter, _, nSupport, clades, species = GetRoot(args.Species_tree, args.gene_trees, GeneToSpecies, nProcs, treeFmt = 1, qWriteDupTrees=args.output)
-        roots, clusters_counter, _, nSupport, clades, species = GetRoot(args.Species_tree, args.gene_trees, GeneToSpecies, nProcs, treeFmt = 1)
+        roots, clusters_counter, _, nSupport, clades, species, all_stride_dup_genes = GetRoot(args.Species_tree, args.gene_trees, GeneToSpecies, nProcs)
         PrintRootingSummary(roots, clusters_counter, nSupport)
         outputDir = CreateNewWorkingDirectory(args.gene_trees + "/../STRIDE_Results")
 #        shelveFN = outputDir + "STRIDE_data.shv"
@@ -698,7 +727,7 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--separator", choices=("dot", "dash", "second_dash", "3rd_dash", "hyphen"), help="Separator been species name and gene name in gene tree taxa")
     parser.add_argument("-S", "--Species_tree", help="Unrooted species tree in newick format")
     parser.add_argument("-d", "--directory", action="store_true", help="Process all trees in input directory")
-#    parser.add_argument("--debug", action="store_true", help="Run in serial to enable easier debugging")
+    parser.add_argument("--debug", action="store_true", help="Run in serial to enable easier debugging")
 #    parser.add_argument("-o", "--output", action="store_true", help="Write out gene trees rooted at duplications")
     parser.set_defaults(Func=Main_Full)   
     args = parser.parse_args()
