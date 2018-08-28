@@ -8,7 +8,7 @@ A gene duplication event at the base of a clade of species is synapamorphic, and
 Test datasets together with a script to run all the datasets can be downloaded from [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.581360.svg)](https://doi.org/10.5281/zenodo.581360). 
 
 ### Usage:
-STRIDE requires python plus the ete (version 2 or 3) tree library. To run STRIDE:
+STRIDE requires python plus numpy, scipyt and the ete (version 2 or 3) tree library. To run STRIDE:
 
 `stride.py -s gene_to_species_conversion -S Species_tree.tre -d gene_trees/`
 
