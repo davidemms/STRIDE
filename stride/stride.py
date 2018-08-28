@@ -599,7 +599,10 @@ def WriteResults(species_tree_fn_or_text, roots, S, clades, clusters_counter, ou
 #        print((clusters_counter[c], c))
     print("\nResults written to:\n" + os.path.realpath(output_dir))
     # Label species tree nodes
-    species_tree = ete.Tree(species_tree_fn_or_text)
+    try:
+        species_tree = ete.Tree(species_tree_fn_or_text, format=2)
+    except:
+        species_tree = ete.Tree(species_tree_fn_or_text, format=1) 
     thisRoot = roots[0]
     species_tree = RootAtClade(species_tree, thisRoot) 
     iNode = 0
